@@ -1,0 +1,14 @@
+langchain
+langchain_community
+langchain_groq
+langchain_core
+python-dotenv
+sentence-transformers
+faiss-cpu
+huggingface
+langserve
+streamlit
+fastapi
+uvicorn
+bs4
+pypdf
