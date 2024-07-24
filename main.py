@@ -17,7 +17,7 @@ class QueryModel(BaseModel):
     query: str
 
 # Load the Groq model
-groq_api_key = "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"
+groq_api_key = "GROQ_API_KEY" # Please paste your api key here
 llm = ChatGroq(groq_api_key=groq_api_key, model_name='llama3-70b-8192')
 
 # Load HuggingFaceEmbeddings
