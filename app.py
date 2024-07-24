@@ -1,89 +1,142 @@
-import os
-import uvicorn
+import streamlit as st
 import requests
-import uuid
-from fastapi import FastAPI, UploadFile, File, Body
-from fastapi.responses import JSONResponse
-from langchain_groq import ChatGroq
-from langchain.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain_core.prompts import ChatPromptTemplate
-from langchain.chains.retrieval import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.chains import ConversationalRetrievalChain
+import re
+import html
 
+# FastAPI server URL
+FASTAPI_URL = "http://localhost:8000"
 
-### Load the groq model
-groq_api_key = "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"
-llm = ChatGroq(groq_api_key=groq_api_key,
-                model_name='llama3-70b-8192')
+def upload_pdf(file):
+    files = {"file": file}
+    response = requests.post(f"{FASTAPI_URL}/upload", files=files)
+    return response.json()
 
-### Load HuggingFaceEmbeddings
-embeddings = HuggingFaceEmbeddings(
-            model_name ="BAAI/bge-small-en-v1.5",
-            model_kwargs={'device':'cpu'},
-            encode_kwargs={'normalize_embeddings':True}
+def ask_query(query):
+    payload = {"query": query}
+    headers = {"Content-Type": "application/json"}
+    response = requests.post(f"{FASTAPI_URL}/qna", json=payload, headers=headers)
+    return response.json()
+
+def clear_all():
+    response = requests.get(f"{FASTAPI_URL}/clear")
+    return response.json()
+
+def clear_chat_history():
+    st.session_state.messages = [{"role": "assistant", "content": "Welcome! Upload a PDF to ask questions about its content."}]
+    st.session_state.uploaded = False
+    st.session_state.query = ""
+    st.session_state.answer_response = None
+    st.session_state.chat_history = []
+
+def format_message(text):
+    text_blocks = re.split(r"```[\s\S]*?```", text)
+    code_blocks = re.findall(r"```([\s\S]*?)```", text)
+    text_blocks = [html.escape(block) for block in text_blocks]
+
+    formatted_text = ""
+    for i in range(len(text_blocks)):
+        formatted_text += text_blocks[i].replace("\n", "<br>")
+        if i < len(code_blocks):
+            formatted_text += f'<pre style="white-space: pre-wrap; word-wrap: break-word;"><code>{html.escape(code_blocks[i])}</code></pre>'
+
+    return formatted_text
+
+def message_func(text, is_user=False):
+    message_alignment = "flex-end" if is_user else "flex-start"
+    message_bg_color = "linear-gradient(135deg, #00B2FF 0%, #006AFF 100%)" if is_user else "#71797E"
+    if not is_user:
+        text = format_message(text)
+
+    st.write(
+        f"""
+        <div style="display: flex; align-items: center; margin-bottom: 10px; justify-content: {message_alignment};">
+            <div style="background: {message_bg_color}; color: white; border-radius: 20px; padding: 10px; margin-right: 5px; max-width: 75%; font-size: 14px;">
+                {text}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-prompt = ChatPromptTemplate.from_template(
+
+def initialize_session_state():
+    if 'uploaded' not in st.session_state:
+        st.session_state.uploaded = False
+    if 'query' not in st.session_state:
+        st.session_state.query = ""
+    if 'answer_response' not in st.session_state:
+        st.session_state.answer_response = None
+    if 'chat_history' not in st.session_state:
+        st.session_state.chat_history = []
+    if "messages" not in st.session_state.keys():
+        st.session_state.messages = [{"role": "assistant", "content": "Welcome! Upload a PDF to ask questions about its content."}]
+
+# Set page configuration
+st.set_page_config(page_title="🤖💬 PDF ChatBot")
+
+# Apply gradient text style
+gradient_text_html = """
+<style>
+.gradient-text {
+    font-weight: bold;
+    background: -webkit-linear-gradient(left, blue, purple);
+    background: linear-gradient(to right, blue, purple);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    display: inline;
+    font-size: 3em;
+}
+</style>
+<div class="gradient-text">PDF ChatBot</div>
 """
-Provide descriptive answer to the question based on the provided context only.
-Please provide the most accurate response basedd on the question
-<context>
-{context}
-<context>
-Questions:{input}
+st.markdown(gradient_text_html, unsafe_allow_html=True)
 
-"""
-)
-# Ensure the files directory exists
-os.makedirs('files', exist_ok=True)
+# Sidebar layout
+with st.sidebar:
+    st.title('🤖💬 PDF ChatBot')
+    st.subheader('Functions')
+    st.button('Clear Chat History', on_click=clear_chat_history)
 
-app = FastAPI()
+    uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
+    if st.button("Upload"):
+        if uploaded_file is not None:
+            with st.spinner('Uploading and processing file...'):
+                upload_response = upload_pdf(uploaded_file)
+            if "error" in upload_response:
+                st.error(f"Error: {upload_response['error']}")
+            else:
+                st.success("File uploaded and processed successfully! You can now ask questions about your PDF.")
+                st.session_state.uploaded = True
+                st.session_state.query = ""
+                st.session_state.answer_response = None
+                st.session_state.chat_history = []
 
-# API endpoint for file upload
-@app.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
-    try:
-        contents = await file.read()
-        file_path = f'files/{file.filename}'
-        with open(file_path, 'wb') as gf:
-            gf.write(contents)
-    except Exception as err:
-        return {"error": f"Error occurred during file upload 0: {str(err)}"}
+    if st.button("Clear All"):
+        clear_response = clear_all()
+        if "error" in clear_response:
+            st.error(f"Error: {clear_response['error']}")
+        else:
+            st.success("Cleared successfully!")
+            clear_chat_history()
 
-    # Document processing and FAISS indexing
-    try:
-        loader = PyPDFLoader(file_path)
-        documents = loader.load()
-        text_spliter = RecursiveCharacterTextSplitter(chunk_size = 1000,chunk_overlap=20)
-        chunks = text_spliter.split_documents(documents)
+# Initialize session state
+initialize_session_state()
 
-        faiss_db = FAISS.from_documents(chunks, embeddings)
-        faiss_db.save_local(f"faiss_db/faiss_index")
-        os.remove(file_path)
-        return {"filename": f"file uploaded successfully: {file.filename}"}
-    except Exception as err:
-        return JSONResponse(status_code=400, content={"error": f"Error occurred during file processing: {str(err)}"})
+# Display initial messages
+for message in st.session_state.messages:
+    message_func(message["content"], is_user=(message["role"] == "user"))
 
-@app.post("/askLLM")
-async def ask(Query: str = 'summarize this document'):
-    try:
-        document_chain = create_stuff_documents_chain(llm,prompt)
-        new_db = FAISS.load_local(f"faiss_db/faiss_index", embeddings,allow_dangerous_deserialization= True)
+# Text input for user queries
+if prompt := st.chat_input("Your message:"):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    message_func(prompt, is_user=True)
 
-        # initialize the RAG Chain
-        retriever = new_db.as_retriever()
-
-        retrival_chain = create_retrieval_chain(retriever,document_chain)
-
-        response = retrival_chain.invoke({"input":Query})
-
-        return {"response": response['answer']}
-    
-    except Exception as err:
-        return {"error": f"Error occurred during handling user query : {str(err)}"}
-
-if __name__ == "__main__":
-    uvicorn.run(app,host="localhost",port=8000)
+    # Fetch and display assistant response
+    with st.spinner('Getting answer...'):
+        response = ask_query(prompt)
+    if "response" in response:
+        st.session_state.messages.append({"role": "assistant", "content": response["response"]})
+        message_func(response["response"], is_user=False)
+    else:
+        error_message = "Failed to get a response from the server." if st.session_state.uploaded else "Please upload a document to proceed with queries."
+        st.session_state.messages.append({"role": "assistant", "content": error_message})
+        message_func(error_message, is_user=False)
